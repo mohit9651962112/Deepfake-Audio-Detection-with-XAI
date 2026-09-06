@@ -27,10 +27,7 @@ st.set_page_config(
 # MODEL PATH
 # ============================================================
 
-MODEL_PATH = (
-    "/content/drive/MyDrive/Deepfake-Audio/models/"
-    "deepfake_mobilenetv2_balanced_v2_best.keras"
-)
+MODEL_PATH = "deepfake_mobilenetv2_balanced_v2_best.keras"
 
 
 # ============================================================
