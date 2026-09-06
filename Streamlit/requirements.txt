@@ -3,6 +3,6 @@ tensorflow==2.20.0
 librosa
 numpy
 matplotlib
-opencv-python
+opencv-python-headless
 pillow
 lime
