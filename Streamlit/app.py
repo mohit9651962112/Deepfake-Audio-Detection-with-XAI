@@ -1,193 +1,1386 @@
+
 import streamlit as st
-import pandas as pd
-import numpy as np
-import librosa
-import os
-from tensorflow.keras.models import load_model
-import librosa.display, os
-import matplotlib.pyplot as plt
-from keras.preprocessing.image import load_img,img_to_array
-from keras.models import load_model
 import tensorflow as tf
-from keras.applications.mobilenet import preprocess_input
-import lime
-from lime import lime_image
-from skimage.segmentation import mark_boundaries
+import librosa
+import librosa.display
+import numpy as np
 import matplotlib.pyplot as plt
-from skimage.util import img_as_float
-import cv2 
-import time
+import io
+import cv2
 
-st.set_page_config(page_title="Deepfake Audio Detection",page_icon="")
+from lime import lime_image
 
-class_names = ['real','fake']
 
-def save_file(sound_file):
-    # save your sound file in the right folder by following the path
-    with open(os.path.join('audio_files/', sound_file.name),'wb') as f:
-         f.write(sound_file.getbuffer())
-    return sound_file.name
+# ============================================================
+# PAGE CONFIG
+# ============================================================
 
-def create_spectrogram(sound):
-    audio_file = os.path.join('audio_files/', sound)
+st.set_page_config(
+    page_title="Deepfake Audio Detection using XAI",
+    page_icon="🎧",
+    layout="centered",
+    initial_sidebar_state="expanded"
+)
 
-    fig = plt.figure()
-    ax = fig.add_subplot(1, 1, 1)
 
-    fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
+# ============================================================
+# MODEL PATH
+# ============================================================
 
-    y, sr = librosa.load(audio_file)
-    ms = librosa.feature.melspectrogram(y=y, sr=sr)
-    log_ms = librosa.power_to_db(ms, ref=np.max)
-    librosa.display.specshow(log_ms, sr=sr)
-    # st.pyplot(fig)
-    plt.savefig('melspectrogram.png')
-    image_data = load_img('melspectrogram.png',target_size=(224,224))
-    st.image(image_data)
-    return(image_data)
+MODEL_PATH = (
+    "/content/drive/MyDrive/Deepfake-Audio/models/"
+    "deepfake_mobilenetv2_balanced_v2_best.keras"
+)
 
-def predictions(image_data,model):
-  
-#   model.summary(print_fn=lambda x: st.text(x))
 
-#   img_array = img_to_array(image_data)
-#   img_batch = np.expand_dims(img_array, axis=0)
+# ============================================================
+# CUSTOM CSS
+# ============================================================
 
-#   img_preprocessed = preprocess_input(img_batch)
-#   prediction = model.predict(img_preprocessed)
+st.markdown(
+    """
+    <style>
 
-#   class_label = np.argmax(prediction)
-    img_array = np.array(image_data)
-    img_array1 = img_array / 255
-    img_batch = np.expand_dims(img_array1, axis=0)
+    /* ---------- Main background ---------- */
 
-    # img_preprocessed = preprocess_input(img_batch)
-    prediction = model.predict(img_batch)
-    class_label = np.argmax(prediction)
-    return class_label,prediction
+    .stApp {
+        background-color: #0e0f13;
+    }
 
-def lime_predict(image_data,model):
-    img_array = np.array(image_data)
-    img_array1 = img_array / 255
-    img_batch = np.expand_dims(img_array1, axis=0)
+    /* ---------- Main content width ---------- */
 
-    # img_preprocessed = preprocess_input(img_batch)
-    prediction = model.predict(img_batch)
-    class_label = np.argmax(prediction)
+    .block-container {
+        max-width: 850px;
+        padding-top: 2.5rem;
+        padding-bottom: 4rem;
+    }
 
-    explainer = lime.lime_image.LimeImageExplainer()
-    # explanation = explainer.explain_instance(img_array.astype('float64'), model.predict, hide_color=0, num_samples=1000)
-    explanation = explainer.explain_instance(img_array1.astype('float64'), model.predict, hide_color=0, num_samples=1000)
-    
-    fig, axs = plt.subplots(1, 2, figsize=(10, 25))
-    for i in range(2):
-        # Show the original image and the explanation
-        temp, mask = explanation.get_image_and_mask(np.argmax(prediction[0], axis=0), positive_only=False, num_features=8, hide_rest=True)
-        axs[0].imshow(image_data)
-        axs[1].imshow(mark_boundaries(temp, mask))
-        axs[1].set_title(f"Predicted class: {class_names[class_label]}")
-    plt.tight_layout()
-    # plt.show()
-    # plt.savefig('XAI_output.png')
-    st.pyplot(fig)
-    return(fig)
+    /* ---------- Sidebar ---------- */
 
-def grad_predict(image_data,model_mob,preds,class_idx):
-    img_array = img_to_array(image_data)
-    # img_array1 = img_array / 255
-    x = np.expand_dims(img_array,axis=0)
-    x = tf.keras.applications.vgg16.preprocess_input(x)
+    [data-testid="stSidebar"] {
+        background-color: #24252e;
+    }
 
-    model = tf.keras.applications.VGG16(weights='imagenet', include_top=True)
-    last_conv_layer = model.get_layer('block5_conv3')
-    grad_model = tf.keras.models.Model([model.inputs], [last_conv_layer.output, model.output])
+    [data-testid="stSidebar"] .stMarkdown {
+        color: white;
+    }
 
-    with tf.GradientTape() as tape:
-        last_conv_layer_output, preds = grad_model(x)
-        class_output = preds[:, class_idx]
-    grads = tape.gradient(class_output, last_conv_layer_output)
+    /* ---------- Main title ---------- */
 
-    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+    .main-title {
+        font-size: 42px;
+        font-weight: 800;
+        line-height: 1.2;
+        color: #f5f5f5;
+        margin-bottom: 35px;
+    }
 
-    last_conv_layer_output = last_conv_layer_output[0]
-    heatmap = last_conv_layer_output @ pooled_grads[..., tf.newaxis]
-    heatmap = tf.squeeze(heatmap)
-    heatmap = tf.maximum(heatmap, 0) / tf.math.reduce_max(heatmap)
+    /* ---------- Section title ---------- */
 
-    heatmap = cv2.resize(np.float32(heatmap), (x.shape[2], x.shape[1]))
+    .section-title {
+        font-size: 25px;
+        font-weight: 700;
+        color: #f1f1f1;
+        margin-top: 30px;
+        margin-bottom: 15px;
+    }
 
-    heatmap = np.uint8(255 * heatmap)
-    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
-    heatmap = heatmap.astype(np.float32)
-    superimposed_img = cv2.addWeighted(x[0], 0.6, heatmap, 0.4, 0, dtype = cv2.CV_32F)
+    /* ---------- Result cards ---------- */
 
-    # fig, ax = plt.subplots()
-    # ax.title('Grad-CAM visualization')
-    # st.write(superimposed_img)
-    # plt.imshow(superimposed_img)
-    # plt.savefig('XAI_output.png')
-    # st.pyplot(fig)
-    # st.pyplot(superimposed_img)
+    .result-real {
+        background: #123d2b;
+        border: 1px solid #27ae60;
+        border-radius: 8px;
+        padding: 18px 22px;
+        margin-top: 10px;
+        margin-bottom: 20px;
+        color: #55e68a;
+        font-size: 17px;
+        font-weight: 600;
+    }
 
-    fig1, ax = plt.subplots(1, 2, figsize=(10, 25))
-    for i in range(2):
-        # Show the original image and the explanation
-        ax[0].imshow(image_data)
-        ax[1].imshow(superimposed_img)
-        ax[1].set_title(f"Predicted class: {class_names[class_idx]}")
-    plt.tight_layout()
-    # plt.show()
-    # plt.savefig('XAI_output.png')
-    st.pyplot(fig1)
-    return(superimposed_img)
+    .result-fake {
+        background: #401d22;
+        border: 1px solid #e74c3c;
+        border-radius: 8px;
+        padding: 18px 22px;
+        margin-top: 10px;
+        margin-bottom: 20px;
+        color: #ff6b60;
+        font-size: 17px;
+        font-weight: 600;
+    }
 
-def main():
-    page = st.sidebar.selectbox("App Selections", ["Homepage", "About"])
-    if page == "Homepage":
-        st.title("Deepfake Audio Detection using XAI")
-        homepage()
-    elif page == "About":
-        about()
+    /* ---------- Confidence ---------- */
 
-def about():
-    # st.set_page_config(layout="centered")
-    st.title("About present work")
-    st.markdown("**Deepfake audio refers to synthetically created audio by digital or manual means. An emerging field, it is used to not only create legal digital hoaxes, but also fool humans into believing it is a human speaking to them. Through this project, we create our own deep faked audio using Generative Adversarial Neural Networks (GANs) and objectively evaluate generator quality using Fréchet Audio Distance (FAD) metric. We augment a pre-existing dataset of real audio samples with our fake generated samples and classify data as real or fake using MobileNet, Inception, VGG and custom CNN models. MobileNet is the best performing model with an accuracy of 91.5% and precision of 0.507. We further convert our black box deep learning models into white box models, by using explainable AI (XAI) models. We quantitatively evaluate the classification of a MEL Spectrogram through LIME, SHAP and GradCAM models. We compare the features of a spectrogram that an XAI model focuses on to provide a qualitative analysis of frequency distribution in spectrograms.**")
-    st.markdown("**The goal of this project is to study features of audio and bridge the gap of explain ability in deep fake audio detection, through our novel system pipeline. The findings of this study are applicable to the fields of phishing audio calls and digital mimicry detection on video streaming platforms. The use of XAI will provide end-users a clear picture of frequencies in audio that are flagged as fake, enabling them to make better decisions in generation of fake samples through GANs.**")
+    .confidence-label {
+        color: #d0d0d0;
+        font-size: 15px;
+        margin-top: 15px;
+    }
+
+    .confidence-value {
+        color: #f5f5f5;
+        font-size: 34px;
+        font-weight: 700;
+        margin-bottom: 20px;
+    }
+
+    /* ---------- Probability ---------- */
+
+    .prob-title {
+        color: #dddddd;
+        font-size: 15px;
+        margin-bottom: 6px;
+    }
+
+    .prob-value {
+        color: #ffffff;
+        font-size: 20px;
+        font-weight: 600;
+    }
+
+    /* ---------- Divider ---------- */
+
+    .divider {
+        height: 1px;
+        background-color: #383a42;
+        margin: 25px 0;
+    }
+
+    /* ---------- About ---------- */
+
+    .about-box {
+        background: #17191f;
+        border: 1px solid #30323a;
+        border-radius: 10px;
+        padding: 25px;
+        color: #dddddd;
+        line-height: 1.7;
+    }
+
+    /* ---------- Footer ---------- */
+
+    .footer {
+        text-align: center;
+        color: #777a83;
+        font-size: 13px;
+        margin-top: 45px;
+    }
+
+    /* ---------- Buttons ---------- */
+
+    div.stButton > button {
+        width: 100%;
+        border-radius: 7px;
+        min-height: 42px;
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+
+# ============================================================
+# LOAD MODEL
+# ============================================================
+
+@st.cache_resource
+def load_model():
+
+    try:
+
+        model = tf.keras.models.load_model(
+            MODEL_PATH,
+            compile=False
+        )
+
+        return model
+
+    except Exception as e:
+
+        st.error(
+            f"Unable to load model.\n\n"
+            f"Path: {MODEL_PATH}\n\n"
+            f"Error: {e}"
+        )
+
+        return None
+
+
+# ============================================================
+# AUDIO -> SPECTROGRAM
+# ============================================================
+
+def create_spectrogram(audio_bytes):
+
+    """
+    Returns:
+
+    model_image:
+        224x224x3 tensor normalized to [-1, 1]
+        This is used by the trained MobileNetV2 model.
+
+    display_image:
+        224x224x3 tensor normalized to [0, 1]
+        This is only used for displaying the spectrogram.
+    """
+
+    try:
+
+        # Load audio exactly like training preprocessing
+        y, sr = librosa.load(
+            io.BytesIO(audio_bytes),
+            sr=22050,
+            mono=True
+        )
+
+        if y is None or len(y) == 0:
+            raise ValueError("The uploaded audio file is empty.")
+
+        # Mel spectrogram
+        mel = librosa.feature.melspectrogram(
+            y=y,
+            sr=sr
+        )
+
+        # Convert to dB
+        log_mel = librosa.power_to_db(
+            mel,
+            ref=np.max
+        )
+
+        # ====================================================
+        # DISPLAY IMAGE
+        # ====================================================
+
+        display_image = log_mel.astype(np.float32)
+
+        min_value = display_image.min()
+        max_value = display_image.max()
+
+        display_image = (
+            display_image - min_value
+        ) / (
+            max_value - min_value + 1e-8
+        )
+
+        display_tensor = tf.convert_to_tensor(
+            display_image,
+            dtype=tf.float32
+        )
+
+        display_tensor = display_tensor[..., tf.newaxis]
+
+        display_tensor = tf.image.resize(
+            display_tensor,
+            (224, 224)
+        )
+
+        display_tensor = tf.repeat(
+            display_tensor,
+            repeats=3,
+            axis=-1
+        )
+
+        # Ensure [0,1]
+        display_tensor = tf.clip_by_value(
+            display_tensor,
+            0.0,
+            1.0
+        )
+
+        # ====================================================
+        # MODEL IMAGE
+        # ====================================================
+
+        model_tensor = display_tensor * 2.0 - 1.0
+
+        return model_tensor, display_tensor
+
+    except Exception as e:
+
+        raise RuntimeError(
+            f"Could not process audio: {e}"
+        )
+
+
+# ============================================================
+# CREATE BEAUTIFUL MEL SPECTROGRAM FOR UI
+# ============================================================
+
+def create_display_spectrogram(audio_bytes):
+
+    try:
+
+        y, sr = librosa.load(
+            io.BytesIO(audio_bytes),
+            sr=22050,
+            mono=True
+        )
+
+        if y is None or len(y) == 0:
+            raise ValueError("Empty audio.")
+
+        mel = librosa.feature.melspectrogram(
+            y=y,
+            sr=sr
+        )
+
+        log_mel = librosa.power_to_db(
+            mel,
+            ref=np.max
+        )
+
+        fig, ax = plt.subplots(
+            figsize=(10, 4)
+        )
+
+        librosa.display.specshow(
+            log_mel,
+            sr=sr,
+            x_axis="time",
+            y_axis="mel",
+            ax=ax
+        )
+
+        ax.set_title(
+            "Mel Spectrogram",
+            fontsize=13
+        )
+
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Frequency")
+
+        fig.tight_layout()
+
+        buffer = io.BytesIO()
+
+        fig.savefig(
+            buffer,
+            format="png",
+            dpi=150,
+            bbox_inches="tight"
+        )
+
+        plt.close(fig)
+
+        buffer.seek(0)
+
+        return buffer
+
+    except Exception as e:
+
+        raise RuntimeError(
+            f"Could not create spectrogram visualization: {e}"
+        )
+
+
+# ============================================================
+# PREDICTION
+# ============================================================
+
+def predict_audio(image, model):
+
+    """
+
+    Model output:
+
+        sigmoid output = probability of REAL
+
+    Therefore:
+
+        real_probability = prediction
+        fake_probability = 1 - prediction
+
+    """
+
+    image_batch = tf.expand_dims(
+        image,
+        axis=0
+    )
+
+    prediction = model.predict(
+        image_batch,
+        verbose=0
+    )[0][0]
+
+    real_probability = float(prediction)
+
+    fake_probability = 1.0 - real_probability
+
+    if real_probability >= 0.5:
+
+        label = "REAL"
+
+    else:
+
+        label = "FAKE"
+
+    confidence = max(
+        real_probability,
+        fake_probability
+    )
+
+    return (
+        label,
+        confidence,
+        real_probability,
+        fake_probability
+    )
+
+
+# ============================================================
+# LIME
+# ============================================================
+
+def lime_predict(images, model):
+
+    """
+    LIME expects images in [0,1].
+
+    Detector model expects [-1,1].
+
+    Therefore convert:
+
+        [0,1] -> [-1,1]
+
+    """
+
+    images = np.asarray(
+        images,
+        dtype=np.float32
+    )
+
+    images = np.clip(
+        images,
+        0.0,
+        1.0
+    )
+
+    model_images = (
+        images * 2.0 - 1.0
+    )
+
+    predictions = model.predict(
+        model_images,
+        verbose=0
+    ).reshape(-1)
+
+    fake_probability = 1.0 - predictions
+    real_probability = predictions
+
+    return np.column_stack(
+        [
+            fake_probability,
+            real_probability
+        ]
+    )
+
+
+def generate_lime(image, model):
+
+    explainer = lime_image.LimeImageExplainer()
+
+    image_np = image.numpy().astype(np.float32)
+
+    image_np = np.clip(
+        image_np,
+        0.0,
+        1.0
+    )
+
+    explanation = explainer.explain_instance(
+        image_np,
+        lambda imgs: lime_predict(
+            imgs,
+            model
+        ),
+        top_labels=2,
+        hide_color=0,
+        num_features=15,
+        positive_only=False,
+        num_samples=500
+    )
+
+    prediction = lime_predict(
+        image_np[None, ...],
+        model
+    )[0]
+
+    predicted_label = int(
+        np.argmax(prediction)
+    )
+
+    temp, mask = explanation.get_image_and_mask(
+        predicted_label,
+        positive_only=False,
+        num_features=15,
+        hide_rest=False
+    )
+
+    temp = np.clip(
+        temp,
+        0.0,
+        1.0
+    )
+
+    result = (
+        temp * 255
+    ).astype(np.uint8)
+
+    # Draw explanation boundaries
+    boundary_mask = (
+        np.abs(mask) > 0
+    ).astype(np.uint8) * 255
+
+    contours, _ = cv2.findContours(
+        boundary_mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    result = cv2.cvtColor(
+        result,
+        cv2.COLOR_RGB2BGR
+    )
+
+    cv2.drawContours(
+        result,
+        contours,
+        -1,
+        (255, 255, 0),
+        2
+    )
+
+    result = cv2.cvtColor(
+        result,
+        cv2.COLOR_BGR2RGB
+    )
+
+    return result
+
+# ============================================================
+# GRAD-CAM
+# ============================================================
+
+def grad_cam(image, model):
+
+    """
+    Grad-CAM for:
+
+        Sequential
+            MobileNetV2
+            GlobalAveragePooling
+            Dense
+            Dropout
+            Dense
+            Dropout
+            Dense
+
+    The MobileNetV2 base model is the nested Keras model.
+    """
+
+    try:
+
+        image_batch = tf.expand_dims(
+            image,
+            axis=0
+        )
+
+        # ----------------------------------------------------
+        # Find nested MobileNetV2
+        # ----------------------------------------------------
+
+        base_model = None
+
+        for layer in model.layers:
+
+            if isinstance(
+                layer,
+                tf.keras.Model
+            ):
+
+                base_model = layer
+                break
+
+        if base_model is None:
+
+            raise ValueError(
+                "Could not find the MobileNetV2 base model."
+            )
+
+        # ----------------------------------------------------
+        # Find last convolutional layer
+        # ----------------------------------------------------
+
+        try:
+
+            last_conv_layer = base_model.get_layer(
+                "out_relu"
+            )
+
+        except Exception:
+
+            # Fallback: find last 4D layer
+            last_conv_layer = None
+
+            for layer in reversed(
+                base_model.layers
+            ):
+
+                try:
+
+                    output_shape = layer.output.shape
+
+                    if len(output_shape) == 4:
+
+                        last_conv_layer = layer
+                        break
+
+                except Exception:
+
+                    continue
+
+            if last_conv_layer is None:
+
+                raise ValueError(
+                    "Could not find convolutional layer."
+                )
+
+        # ----------------------------------------------------
+        # Gradient model
+        # ----------------------------------------------------
+
+        grad_model = tf.keras.models.Model(
+            inputs=base_model.input,
+            outputs=[
+                last_conv_layer.output,
+                base_model.output
+            ]
+        )
+
+        with tf.GradientTape() as tape:
+
+            conv_outputs, base_output = grad_model(
+                image_batch,
+                training=False
+            )
+
+            x = base_output
+
+            # Pass MobileNet output through classifier
+            for layer in model.layers[1:]:
+
+                x = layer(
+                    x,
+                    training=False
+                )
+
+            prediction = x
+
+            real_probability = prediction[:, 0]
+
+        # ----------------------------------------------------
+        # Gradients
+        # ----------------------------------------------------
+
+        gradients = tape.gradient(
+            real_probability,
+            conv_outputs
+        )
+
+        if gradients is None:
+
+            raise ValueError(
+                "Gradients could not be calculated."
+            )
+
+        # Global average pooling
+        pooled_gradients = tf.reduce_mean(
+            gradients,
+            axis=(0, 1, 2)
+        )
+
+        conv_outputs = conv_outputs[0]
+
+        # Weighted activation map
+        heatmap = tf.reduce_sum(
+            conv_outputs *
+            pooled_gradients,
+            axis=-1
+        )
+
+        # ReLU
+        heatmap = tf.maximum(
+            heatmap,
+            0
+        )
+
+        max_heatmap = tf.reduce_max(
+            heatmap
+        )
+
+        heatmap = heatmap / (
+            max_heatmap + tf.keras.backend.epsilon()
+        )
+
+        heatmap = heatmap.numpy()
+
+        # ----------------------------------------------------
+        # Convert model image back to display image
+        # ----------------------------------------------------
+
+        display_image = (
+            image.numpy() + 1.0
+        ) / 2.0
+
+        display_image = np.clip(
+            display_image,
+            0.0,
+            1.0
+        )
+
+        display_image = (
+            display_image * 255
+        ).astype(np.uint8)
+
+        # Resize heatmap
+        heatmap = cv2.resize(
+            heatmap,
+            (
+                display_image.shape[1],
+                display_image.shape[0]
+            )
+        )
+
+        heatmap = (
+            heatmap * 255
+        ).astype(np.uint8)
+
+        # Apply color map
+        heatmap_color = cv2.applyColorMap(
+            heatmap,
+            cv2.COLORMAP_JET
+        )
+
+        heatmap_color = cv2.cvtColor(
+            heatmap_color,
+            cv2.COLOR_BGR2RGB
+        )
+
+        # Overlay
+        superimposed = cv2.addWeighted(
+            display_image,
+            0.60,
+            heatmap_color,
+            0.40,
+            0
+        )
+
+        return (
+            display_image,
+            heatmap_color,
+            superimposed
+        )
+
+    except Exception as e:
+
+        raise RuntimeError(
+            f"Grad-CAM failed: {e}"
+        )
+
+
+# ============================================================
+# HOMEPAGE
+# ============================================================
 
 def homepage():
-    st.write('___')
-    st.subheader("Choose a wav file")
-    uploaded_file = st.file_uploader(' ', type='wav')
-    if uploaded_file is not None:  
-        # view details
-        # file_details = {'filename':uploaded_file.name, 'filetype':uploaded_file.type, 'filesize':uploaded_file.size}
-        # st.write(file_details)
-        # read and play the audio file
-        st.write('### Play audio')
-        audio_bytes = uploaded_file.read()
-        st.audio(audio_bytes, format='audio/wav')
 
-        st.write('### Spectrogram Image:')
-        save_file(uploaded_file)
-        # define the filename
-        sound = uploaded_file.name
-        with st.spinner('Fetching Results...'):
-            spec = create_spectrogram(sound)
-            model = tf.keras.models.load_model('saved_model/model')
-        st.write('### Classification results:')
-        class_label,prediction = predictions(spec,model)
-        st.write("#### The uploaded audio file is "+class_names[class_label])
-        if st.button('Show XAI Metrics'):
-            st.write('### XAI Metrics using Lime ')
-            with st.spinner('Fetching Results...'):
-                fig2 = lime_predict(spec,model)
-            st.write('### XAI Metrics using Grad CAM ')
-            with st.spinner('Fetching Results...'):
-                grad_img = grad_predict(spec,model,prediction,class_label)
-    elif uploaded_file is None:
-        st.info("Please upload an .wav file")
+    # ========================================================
+    # TITLE
+    # ========================================================
 
+    st.markdown(
+        """
+        <div class="main-title">
+            Deepfake Audio Detection<br>
+            using XAI
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # ========================================================
+    # UPLOAD
+    # ========================================================
+
+    st.markdown(
+        '<div class="section-title">Choose a WAV file</div>',
+        unsafe_allow_html=True
+    )
+
+    uploaded_file = st.file_uploader(
+        "Upload WAV audio",
+        type=["wav"],
+        label_visibility="visible"
+    )
+
+    if uploaded_file is None:
+        return
+
+    # ========================================================
+    # FILE DATA
+    # ========================================================
+
+    audio_bytes = uploaded_file.getvalue()
+
+    # ========================================================
+    # AUDIO PLAYER
+    # ========================================================
+
+    st.markdown(
+        '<div class="section-title">Play Audio</div>',
+        unsafe_allow_html=True
+    )
+
+    st.audio(
+        audio_bytes,
+        format="audio/wav"
+    )
+
+    # ========================================================
+    # AUDIO INFORMATION
+    # ========================================================
+
+    st.markdown(
+        '<div class="section-title">📊 Audio Information</div>',
+        unsafe_allow_html=True
+    )
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.caption("File Name")
+        st.write(uploaded_file.name)
+
+    with col2:
+        st.caption("File Type")
+        st.write(uploaded_file.type)
+
+    with col3:
+        st.caption("File Size")
+        st.write(
+            f"{len(audio_bytes) / 1024:.2f} KB"
+        )
+
+    # ========================================================
+    # SPECTROGRAM
+    # ========================================================
+
+    try:
+
+        model_image, display_image = create_spectrogram(
+            audio_bytes
+        )
+
+        spectrogram_image = create_display_spectrogram(
+            audio_bytes
+        )
+
+    except Exception as e:
+
+        st.error(
+            f"Spectrogram generation failed: {e}"
+        )
+
+        return
+
+    st.image(
+        spectrogram_image,
+        caption="Mel Spectrogram",
+        use_container_width=True
+    )
+
+    # ========================================================
+    # MODEL
+    # ========================================================
+
+    model = load_model()
+
+    if model is None:
+        return
+
+    # ========================================================
+    # ANALYZE BUTTON
+    # ========================================================
+
+    if "analysis_done" not in st.session_state:
+        st.session_state.analysis_done = False
+
+    if "prediction_result" not in st.session_state:
+        st.session_state.prediction_result = None
+
+    # Reset analysis when new file is uploaded
+    current_file_id = (
+        uploaded_file.name,
+        len(audio_bytes)
+    )
+
+    if (
+        "current_file_id"
+        not in st.session_state
+        or
+        st.session_state.current_file_id
+        != current_file_id
+    ):
+
+        st.session_state.current_file_id = current_file_id
+        st.session_state.analysis_done = False
+        st.session_state.prediction_result = None
+
+    # ========================================================
+    # ANALYZE
+    # ========================================================
+
+    st.markdown(
+        '<div class="section-title">🔍 Analysis</div>',
+        unsafe_allow_html=True
+    )
+
+    if st.button(
+        "🚀 Analyze Audio",
+        use_container_width=True
+    ):
+
+        with st.spinner(
+            "Analyzing audio..."
+        ):
+
+            try:
+
+                result = predict_audio(
+                    model_image,
+                    model
+                )
+
+                st.session_state.prediction_result = result
+                st.session_state.analysis_done = True
+
+            except Exception as e:
+
+                st.error(
+                    f"Prediction failed: {e}"
+                )
+
+                return
+
+    # ========================================================
+    # SHOW RESULTS
+    # ========================================================
+
+    if st.session_state.analysis_done:
+
+        (
+            label,
+            confidence,
+            real_probability,
+            fake_probability
+        ) = st.session_state.prediction_result
+
+        # ----------------------------------------------------
+        # CLASSIFICATION
+        # ----------------------------------------------------
+
+        st.markdown(
+            '<div class="section-title">'
+            'Classification Results'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        if label == "REAL":
+
+            st.markdown(
+                """
+                <div class="result-real">
+                    🎧 &nbsp; The uploaded audio is <b>REAL</b>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        else:
+
+            st.markdown(
+                """
+                <div class="result-fake">
+                    ⚠️ &nbsp; The uploaded audio is <b>FAKE</b>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        # ----------------------------------------------------
+        # CONFIDENCE
+        # ----------------------------------------------------
+
+        st.markdown(
+            '<div class="confidence-label">'
+            'Confidence'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        st.markdown(
+            f"""
+            <div class="confidence-value">
+                {confidence * 100:.2f}%
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        # ----------------------------------------------------
+        # PROBABILITIES
+        # ----------------------------------------------------
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+
+            st.markdown(
+                '<div class="prob-title">'
+                'Real Probability'
+                '</div>',
+                unsafe_allow_html=True
+            )
+
+            st.markdown(
+                f"""
+                <div class="prob-value">
+                    {real_probability * 100:.2f}%
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        with col2:
+
+            st.markdown(
+                '<div class="prob-title">'
+                'Fake Probability'
+                '</div>',
+                unsafe_allow_html=True
+            )
+
+            st.markdown(
+                f"""
+                <div class="prob-value">
+                    {fake_probability * 100:.2f}%
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        # ----------------------------------------------------
+        # PROGRESS
+        # ----------------------------------------------------
+
+        st.progress(
+            real_probability,
+            text=f"Real: {real_probability * 100:.2f}%"
+        )
+
+        st.progress(
+            fake_probability,
+            text=f"Fake: {fake_probability * 100:.2f}%"
+        )
+
+        # ====================================================
+        # EXPLAINABLE AI
+        # ====================================================
+
+        st.markdown(
+            '<div class="section-title">'
+            'Explainable AI'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        tab1, tab2 = st.tabs(
+            [
+                "🔎 LIME",
+                "🔥 Grad-CAM"
+            ]
+        )
+
+        # ====================================================
+        # LIME
+        # ====================================================
+
+        with tab1:
+
+            st.write(
+                "LIME highlights regions of the "
+                "spectrogram that contributed to "
+                "the model prediction."
+            )
+
+            if st.button(
+                "Generate LIME Explanation",
+                key="generate_lime"
+            ):
+
+                with st.spinner(
+                    "Generating LIME explanation... "
+                    "This may take a few seconds."
+                ):
+
+                    try:
+
+                        lime_result = generate_lime(
+                            model_image,
+                            model
+                        )
+
+                        st.session_state.lime_result = (
+                            lime_result
+                        )
+
+                    except Exception as e:
+
+                        st.session_state.lime_result = None
+
+                        st.error(
+                            f"LIME failed: {e}"
+                        )
+
+            # ------------------------------------------------
+            # Show saved LIME result
+            # ------------------------------------------------
+
+            if (
+                "lime_result"
+                in st.session_state
+                and
+                st.session_state.lime_result
+                is not None
+            ):
+
+                st.image(
+                    st.session_state.lime_result,
+                    caption="LIME Explanation",
+                    use_container_width=True
+                )
+
+        # ====================================================
+        # GRAD-CAM
+        # ====================================================
+
+        with tab2:
+
+            st.write(
+                "Grad-CAM shows the regions of the "
+                "spectrogram that influenced the "
+                "neural network prediction."
+            )
+
+            if st.button(
+                "Generate Grad-CAM",
+                key="generate_gradcam"
+            ):
+
+                with st.spinner(
+                    "Generating Grad-CAM..."
+                ):
+
+                    try:
+
+                        (
+                            original,
+                            heatmap,
+                            superimposed
+                        ) = grad_cam(
+                            model_image,
+                            model
+                        )
+
+                        st.session_state.gradcam_result = (
+                            original,
+                            heatmap,
+                            superimposed
+                        )
+
+                    except Exception as e:
+
+                        st.session_state.gradcam_result = None
+
+                        st.error(
+                            f"Grad-CAM failed: {e}"
+                        )
+
+            # ------------------------------------------------
+            # Show saved Grad-CAM result
+            # ------------------------------------------------
+
+            if (
+                "gradcam_result"
+                in st.session_state
+                and
+                st.session_state.gradcam_result
+                is not None
+            ):
+
+                (
+                    original,
+                    heatmap,
+                    superimposed
+                ) = st.session_state.gradcam_result
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+
+                    st.image(
+                        original,
+                        caption="Original",
+                        use_container_width=True
+                    )
+
+                with col2:
+
+                    st.image(
+                        superimposed,
+                        caption="Grad-CAM",
+                        use_container_width=True
+                    )
+
+        # ====================================================
+        # DISCLAIMER
+        # ====================================================
+
+        st.warning(
+            "Model confidence represents the model's "
+            "predicted probability and should not be "
+            "treated as absolute proof of authenticity."
+        )
+
+    # ========================================================
+    # FOOTER
+    # ========================================================
+
+    st.markdown(
+        """
+        <div class="footer">
+            Deepfake Audio Detection with Explainable AI
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+# ============================================================
+# ABOUT
+# ============================================================
+
+def about():
+
+    st.markdown(
+        """
+        <div class="main-title">
+            About the Project
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        """
+        <div class="about-box">
+
+        <h3>🎧 Deepfake Audio Detection using XAI</h3>
+
+        <p>
+        This application uses a deep learning model to classify
+        audio as either <b>real</b> or <b>fake</b>.
+        </p>
+
+        <p>
+        The uploaded WAV audio is converted into a
+        <b>Mel Spectrogram</b>, which is then processed by a
+        MobileNetV2-based neural network.
+        </p>
+
+        <h4>Model</h4>
+
+        <p>
+        MobileNetV2 with custom dense classification layers.
+        </p>
+
+        <h4>Explainable AI</h4>
+
+        <p>
+        The application provides two XAI techniques:
+        </p>
+
+        <ul>
+            <li><b>LIME</b> – explains important regions of
+            the spectrogram.</li>
+
+            <li><b>Grad-CAM</b> – visualizes areas that strongly
+            influenced the neural network prediction.</li>
+        </ul>
+
+        <h4>Pipeline</h4>
+
+        <p>
+        WAV Audio → Mel Spectrogram → MobileNetV2 →
+        Real/Fake Classification → XAI Explanation
+        </p>
+
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        """
+        <div class="footer">
+            Deepfake Audio Detection with Explainable AI
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    page = st.sidebar.selectbox(
+        "App Selections",
+        [
+            "Homepage",
+            "About"
+        ]
+    )
+
+    if page == "Homepage":
+
+        homepage()
+
+    elif page == "About":
+
+        about()
+
+
+# ============================================================
+# RUN
+# ============================================================
 
 if __name__ == "__main__":
+
     main()

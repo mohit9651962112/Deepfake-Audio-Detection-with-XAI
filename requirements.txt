@@ -1,0 +1,8 @@
+streamlit==1.63.0
+tensorflow==2.20.0
+librosa
+numpy
+matplotlib
+opencv-python
+pillow
+lime
