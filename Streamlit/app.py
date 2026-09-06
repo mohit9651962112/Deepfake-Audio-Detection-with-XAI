@@ -497,7 +497,6 @@ def generate_lime(image, model):
         top_labels=2,
         hide_color=0,
         num_features=15,
-        positive_only=False,
         num_samples=500
     )
 
