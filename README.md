@@ -37,8 +37,8 @@ This project includes a Streamlit web application that provides a user-friendly 
 ![Streamlit App Demo](https://raw.githubusercontent.com/Aamir-Hullur/Deepfake-Audio-detection-using-XAI/main/img/Streamlit_demo.gif)
 
 ## Project Members
-- Aamir Hullur
-- Atharva Gurav
-- Aditi Govindu
-- Parth Godse
+- Rehan Ashraf
+- Guru Prasad Sharma
+- Mohit Kumar Shekhar
+
   
